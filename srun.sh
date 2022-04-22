@@ -1,4 +1,4 @@
-srun --gres=gpu:GTX1080Ti:1 --nodelist=chpc-gpu002 python -u train_gpt.py --coord_feature_dim 256 \
+python -u train_gpt.py --coord_feature_dim 256 \
                 --batch_size 90 \
                 --num_boxes 30 \
                 --dataset crosstask \

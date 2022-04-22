@@ -132,7 +132,7 @@ def eval():
     args = parser.parse_args()
     # create model
     if args.dataset == 'crosstask':
-        args.root_frames = '../../crosstask/crosstask_features'
+        args.root_frames = '/home/cxu-serve/p1/jshi31/dataset/crosstask'
         args.max_traj_len = MAX_TRAJ_LEN
         args.num_classes = 133  # max_n_step = 11, sum 133
         args.model_type = 'woT'  # 'model_T'
@@ -200,7 +200,7 @@ def main():
     args = parser.parse_args()
     # create model
     if args.dataset == 'crosstask':
-        args.root_frames = '../../crosstask/crosstask_features'
+        args.root_frames = '/home/cxu-serve/p1/jshi31/dataset/crosstask'
         args.max_traj_len = MAX_TRAJ_LEN
         args.num_classes = 133  # max_n_step = 11, sum 133
         args.model_type = 'woT'  # 'model_T'
@@ -620,7 +620,7 @@ def accuracy(output, target, topk=(1,), max_traj_len=0):
 
         res = []
         for k in topk:
-            correct_k = correct[:k].view(-1).float().sum(0, keepdim=True)
+            correct_k = correct[:k].reshape(-1).float().sum(0, keepdim=True)
             res.append(correct_k.mul_(100.0 / batch_size))
 
         correct_1 = correct[:1]  # .view(-1, max_traj_len) # (bz, 1)
