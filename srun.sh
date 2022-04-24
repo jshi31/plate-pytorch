@@ -8,4 +8,4 @@ python -u train_gpt.py --coord_feature_dim 256 \
                 --generation_method autoregression \
                 --sample_eval_gpt True \
                 --pred_state_action True \
-                --lr 0.01
+                --lr 0.01 

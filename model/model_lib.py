@@ -1,3 +1,4 @@
+import pdb
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -80,12 +81,16 @@ class GoalAttentionModel(nn.Module):
         self.train()
 
     def forward(self, global_img_input, local_img_input, box_input, video_label, last_action, roi_feat, is_inference):
+        """
+        global_img_input: (bs, traj_len*M, 1024)
+        video_label: (bs, traj_len, 1)
+        """
         if self.args.dataset == 'crosstask':
             global_img_input = global_img_input.view(global_img_input.shape[0], global_img_input.shape[1] // 2, 2, global_img_input.shape[2])
             if self.pred_state_action:
                 intermediate_img_input = global_img_input  # [:, :, 1:]
-            global_img_input = global_img_input[:, [0, -1]].view(global_img_input.shape[0], -1, global_img_input.shape[-1])
-            bs, T, feat = global_img_input.shape  # [30, 2, 3200]  # torch.Size([30, 4, 1024])
+            global_img_input = global_img_input[:, [0, -1]].view(global_img_input.shape[0], -1, global_img_input.shape[-1])  # get the start state and end state of the trajectory
+            bs, T, feat = global_img_input.shape  #  (bs, 4, 1024)
             H = W = int(np.sqrt(feat // (self.hidden_size // 4)))
         else:
             if self.pred_state_action:
@@ -101,11 +106,12 @@ class GoalAttentionModel(nn.Module):
             else:
                 H = int(np.sqrt(feat // 2))
                 W = 2 * H
-
+        
+        # global embedding of initial and goal
         if self.mode == 'one':
             videos_features = global_img_input.view(bs, self.nr_frames * (self.hidden_size // 4), 1, H, W).float()
-            global_features = self.avgpool(videos_features).squeeze()
-            global_features = self.dropout(global_features).unsqueeze(1)  # torch.Size([30, 1024])
+            global_features = self.avgpool(videos_features).squeeze()  
+            global_features = self.dropout(global_features).unsqueeze(1)  # (bs, 1, 1024)  make the initial and end state embedding together
         elif self.mode == 'start_goal':
             video_1 = global_img_input[:, :int(T / 2)]
             video_2 = global_img_input[:, int(T / 2):]
@@ -140,9 +146,9 @@ class GoalAttentionModel(nn.Module):
                     inter_videos_features = self.conv(inter_org_features)  # torch.Size([10, 512, 2, 14, 14])
                     inter_img_input = inter_videos_features.view(inter_videos_features.shape[0], self.nr_frames * self.keep_size, -1)
                 if self.mode in ['one', 'patch']:
-                    inter_videos_features = inter_img_input.view(bs, self.nr_frames * self.keep_size, 1, H, W).float()
-                    inter_global_features = self.avgpool(inter_videos_features).squeeze()
-                    inter_global_features = self.dropout(inter_global_features).unsqueeze(1)  # torch.Size([30, 1024])
+                    inter_videos_features = inter_img_input.view(bs, self.nr_frames * self.keep_size, 1, H, W).float()  # (bs, 4, 1024), the 4 is 2x2, 
+                    inter_global_features = self.avgpool(inter_videos_features).squeeze()  # torch.Size([bs, 4])  JS: but why reduce the dimension into 1??
+                    inter_global_features = self.dropout(inter_global_features).unsqueeze(1)  # torch.Size([bs, 1, 4])
                 elif self.mode == 'start_goal':
                     inter_video_1 = inter_img_input[:, :int(T / 2)]
                     inter_video_2 = inter_img_input[:, int(T / 2):]
@@ -160,7 +166,7 @@ class GoalAttentionModel(nn.Module):
                     inter_x = inter_x.view(inter_x.size(0), T * self.num_patches, self.flatten_dim).float()
                     inter_global_features = self.linear_encoding(inter_x)
                 state_emb.append(inter_global_features)
-            state_emb = torch.cat(state_emb, dim=1)
+            state_emb = torch.cat(state_emb, dim=1)  # (bs, traj_len - 1, 4)
             if self.sa_type == 'temporal_concat':
                 message_state = []
                 for i in range(message.shape[1] - 1):
@@ -170,11 +176,10 @@ class GoalAttentionModel(nn.Module):
                 message = torch.cat(message_state, dim=1)
             elif self.sa_type == 'feature_concat':
                 empty_state = torch.zeros((state_emb.shape[0], 1, state_emb.shape[-1])).cuda()
-                state_emb = torch.cat((state_emb, empty_state), dim=1)
-                message = torch.cat((state_emb, message), dim=-1)
-                first_step = torch.cat((global_features, torch.zeros(message.shape[0], global_features.shape[1], message.shape[-1] - global_features.shape[-1]).cuda()), dim=-1)
-                message = torch.cat((first_step, message), dim=1)
-
+                state_emb = torch.cat((state_emb, empty_state), dim=1)  # (bs, 3, 4) have an empty state as the final state
+                message = torch.cat((state_emb, message), dim=-1)  # (bs, 3, 1028)  concate the visual state embedding with the action embedding. JS: x1 concate a0 ??
+                first_step = torch.cat((torch.zeros(message.shape[0], global_features.shape[1], message.shape[-1] - global_features.shape[-1]).cuda(), global_features), dim=-1)  # (bs, 1, 1028) JS: the first step will concate 
+                message = torch.cat((first_step, message), dim=1)  # (bs, 4, 1028)
         if self.pred_state_action and self.sa_type == 'feature_concat':
             message_input = message  # torch.cat((state_emb, message), dim=-1)
         else:
@@ -185,9 +190,9 @@ class GoalAttentionModel(nn.Module):
                 cls_output = cls_output[:, :-1]
                 state_feat = state_feat[:, :-1]
             elif self.sa_type == 'feature_concat':
-                cls_output, state_feat = self.lang_decoding.get_feat(message_input)
-                cls_output = cls_output[:, :-1]
-                state_feat = state_feat[:, :-2]
+                cls_output, state_feat = self.lang_decoding.get_feat(message_input)  # (bs, 4, 133)  (bs, 4, 4)
+                cls_output = cls_output[:, :-1]  # (bs, 3, 133)
+                state_feat = state_feat[:, :-2]  # (bs, 2, 4)
         else:
             cls_output = self.lang_decoding(message_input)[:, :-1]
         if self.mode == 'start_goal':
@@ -253,7 +258,7 @@ class GoalAttentionModel(nn.Module):
 
         if self.pred_state_action and self.sa_type == 'feature_concat':
             empty_state = torch.zeros(global_features.shape[0], 1, self.hidden_size + self.nr_frames * self.keep_size - global_features.shape[-1]).cuda()
-            global_features = torch.cat((global_features, empty_state), dim=-1)
+            global_features = torch.cat((empty_state, global_features), dim=-1)
 
         message = self.word_embeddings(video_label.squeeze(-1).long())
 

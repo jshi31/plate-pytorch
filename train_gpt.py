@@ -1,3 +1,4 @@
+import pdb
 import argparse
 import os
 import shutil
@@ -363,7 +364,7 @@ def train(train_loader, model, optimizer, epoch, criterion, tb_logger=None):
             last_action = video_label[:, 0]
             if args.model_type in ['woT']:
                 if args.max_traj_len in [3, 4]:
-                    video_label = video_label[:, :args.max_traj_len]
+                    video_label = video_label[:, :args.max_traj_len]  # JS: BUG? should be video_label[1:args.max_traj_len+1]
                 else:
                     video_label = video_label[:, :-1]
             else:

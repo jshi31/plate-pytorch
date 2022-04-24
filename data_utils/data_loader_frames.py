@@ -1,3 +1,4 @@
+import pdb
 import os
 from os.path import join
 from torchvision.transforms import Compose
@@ -380,15 +381,19 @@ class VideoFolder(torch.utils.data.Dataset):
         return partilly_observable_state
 
     def curate_dataset(self, images, labels_matrix, legal_range, orig_bbox, M=2):
+        """
+        images_list: contain the initial two frames of each event, and the last two frames of the last event
+        labels_onehot_list: contain only one label for each event
+        """
         images_list = []
         labels_onehot_list = []
         idx_list = []
         bbox_list = []
         for start_idx, end_idx in legal_range:
-            idx = (end_idx + start_idx) // 2
+            idx = (end_idx + start_idx) // 2  # idx is the middle point of an event
             idx_list.append(idx)
             label_one_hot = labels_matrix[idx]
-            image_start_idx = max(0, (idx - M // 2))
+            image_start_idx = max(0, (idx - M // 2))  # M=2, because it want to sample continuous 2 frame as the start state!!
             image_start = images[image_start_idx: image_start_idx+M]
             images_list.append(image_start)
             labels_onehot_list.append(label_one_hot)
@@ -400,6 +405,8 @@ class VideoFolder(torch.utils.data.Dataset):
         Choose and Load frames per video
         :param index:
         :return:
+        frames: (max_traj_len*M, D)
+        labels_tensor: (max_traj_len + 1, 1) include a initial label
         """
         box_categories = torch.ones(
             (self.coord_nr_frames, self.num_boxes)) * 80.
@@ -418,29 +425,30 @@ class VideoFolder(torch.utils.data.Dataset):
             cnst_path = os.path.join(
                 self.constraints_path, folder_id['task'] + '_' + folder_id['vid'] + '.csv')
             labels_matrix, legal_range = read_assignment(
-                images.shape[0], folder_id['task'], self.n_steps, cnst_path)
+                images.shape[0], folder_id['task'], self.n_steps, cnst_path)  # labels_matrix: (T, 133) zero-one matrix, one means having it.
             legal_range = [(start_idx, end_idx) for (
-                start_idx, end_idx) in legal_range if end_idx < images.shape[0]+1]
+                start_idx, end_idx) in legal_range if end_idx < images.shape[0]+1]  # list of ranges
             # print('len(legal_range): ', len(legal_range))
             if self.args.model_type == 'woT':
                 images, labels_matrix, _, idx_list = self.curate_dataset(
                     images, labels_matrix, legal_range, orig_bbox, M=self.M)
                 if len(labels_matrix) > self.args.max_traj_len:
                     idx = np.random.randint(
-                        0, len(labels_matrix) - self.args.max_traj_len)
+                        0, len(labels_matrix) - self.args.max_traj_len)  # randomly sample one idx from the trajactory
                 else:
                     idx = 0
                 frames = []
+                # randomly sample max_traj_len continuous event from the trajectory
                 for i in range(self.args.max_traj_len):
                     frames.extend(
                         images[min(idx + i, len(images) - 1)])  # goal
-                frames = torch.tensor(frames)
+                frames = torch.tensor(frames)  # ((max_traj_len+1)*M, D)
 
                 labels = []
                 if idx - 1 < 0:
-                    labels.append([0])
+                    labels.append([0])  # append the label before the current event, so for the first event, the action label is 0
                 else:
-                    label = labels_matrix[idx - 1]
+                    label = labels_matrix[idx - 1]   # append the label before the current event
                     ind = np.unravel_index(
                         np.argmax(label, axis=-1), label.shape)
                     labels.append(ind)
@@ -454,7 +462,7 @@ class VideoFolder(torch.utils.data.Dataset):
                         labels.append(ind)
                     else:
                         labels.append([0])
-                labels_tensor = torch.tensor(labels, dtype=torch.float32)
+                labels_tensor = torch.tensor(labels, dtype=torch.float32)  # (max_traj_len+1, 1) because include the initial action
             else:
                 try:
                     legal_range_idx = np.random.randint(0, len(legal_range))
@@ -545,6 +553,10 @@ class VideoFolder(torch.utils.data.Dataset):
         return frames, frames, roi_feat_tensors, box_categories, labels_tensor
 
     def __getitem__(self, index):
+        """
+        global_img_tensors: (max_traj_len*M, D), M is the time length of each state
+        labels: (max_traj_len+1, 1)
+        """
         if self.args.dataset == 'crosstask':
             frames, box_tensors, roi_feat_tensors, box_categories, labels = self.sample_single(
                 index)
@@ -568,7 +580,6 @@ class VideoFolder(torch.utils.data.Dataset):
             labels = labels
         else:
             raise NotImplementedError(self.args.dataset)
-
         return global_img_tensors, box_tensors, roi_feat_tensors, box_categories, labels
 
     def __len__(self):
